@@ -658,7 +658,7 @@ svg text{font-family:inherit}
       <div id="mgCatBudgetList"></div>
       <button class="btn-mini" id="mgAddCatBudget">＋ 添加分类预算</button>
     </div>
-    <div style="font-size:11px;color:var(--muted);background:var(--card2);border-radius:10px;padding:8px 10px;line-height:1.6" id="mgFormula"></div>
+    <div id="mgFormula" style="font-size:11px;color:var(--muted);background:var(--card2);border-radius:10px;padding:8px 10px;line-height:1.6;margin-top:6px"></div>
     <div class="form-footer">
       <button class="btn-ghost" id="mgDelete">删除分组</button>
       <button class="btn-primary" id="mgSave">保存</button>
@@ -1741,9 +1741,36 @@ function updateMgFormula() {
   const salary = Number($('#mgSalary').value) || 0;
   const fx = mg.fixed.reduce((a, f) => a + (Number(f.amount) || 0), 0);
   const budget = Number($('#mgBudget').value) || 0, sav = Number($('#mgSavings').value) || 0;
-  $('#mgFormula').innerHTML = `核算公式：周期可支配 = 工资 − 固定支出 = <b>¥${money(salary - fx)}</b>；可支配拆分 = 可用预算 + 储蓄目标 = <b>¥${money(budget + sav)}</b>。支出先扣可用预算，超出部分动用储蓄。`;
+  const disposable = salary - fx;
+  const totalAlloc = budget + sav;
+  const surplus = disposable - totalAlloc;
+  // 当未输入时不显示
+  if (!salary && !fx && !budget && !sav) { $('#mgFormula').innerHTML = ''; return; }
+  let html = `<div style="line-height:1.8">`;
+  // 第一步：工资 - 固定支出 = 可支配
+  html += `<div style="margin-bottom:4px">`;
+  html += `<span style="color:var(--primary)">周期工资</span> ¥${money(salary)}`;
+  if (fx > 0) html += ` <span style="color:var(--muted)">−</span> <span style="color:var(--red)">固定支出</span> ¥${money(fx)}`;
+  html += ` <span style="color:var(--muted)">=</span> <b style="color:var(--orange)">可支配 ¥${money(disposable)}</b></div>`;
+  // 第二步：可支配 → 可用预算 + 储蓄目标
+  if (budget > 0 || sav > 0) {
+    html += `<div style="margin-bottom:2px">`;
+    html += `<span style="color:var(--orange)">可支配</span> ¥${money(disposable)}`;
+    html += ` <span style="color:var(--muted)">→</span> <span style="color:var(--primary)">可用预算</span> ¥${money(budget)}`;
+    if (sav > 0) html += ` <span style="color:var(--muted)">+</span> <span style="color:#5B8C5A">储蓄目标</span> ¥${money(sav)}`;
+    html += ` <span style="color:var(--muted)">=</span> <b>分配 ¥${money(totalAlloc)}</b></div>`;
+  }
+  // 第三步：差额提示
+  if (totalAlloc > 0 && surplus > 0)
+    html += `<div style="margin-top:4px;color:var(--green);font-weight:600">✓ 可支配充足，还有 ¥${money(surplus)} 未分配</div>`;
+  else if (totalAlloc > 0 && surplus < 0)
+    html += `<div style="margin-top:4px;color:var(--red);font-weight:600">⚠ 分配超出可支配 ¥${money(Math.abs(surplus))}，超出部分将动用储蓄</div>`;
+  else if (surplus > 0)
+    html += `<div style="margin-top:4px;color:var(--muted)">未配置可用预算/储蓄目标，可支配 ¥${money(disposable)} 暂不计入预算池</div>`;
+  html += `</div>`;
+  $('#mgFormula').innerHTML = html;
 }
-['mgSalary'].forEach(id => $('#' + id).oninput = updateMgFormula);
+['mgSalary', 'mgBudget', 'mgSavings'].forEach(id => $('#' + id).oninput = updateMgFormula);
   // 固定支出添加按钮：追加一行空输入行
   $('#mgAddFixed').onclick = () => {
     mg.fixed.push({ icon: '🔒', name: '', amount: 0, payDay: 1 });
