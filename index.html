@@ -452,13 +452,8 @@ svg text{font-family:inherit}
         <div id="gdBar"></div>
       </div>
       <div class="card">
-        <div class="card-head"><h2><span class="dot" style="background:var(--red)"></span>大额消费明细</h2></div>
-        <ul id="gdLargeList"></ul>
-      </div>
-      <!-- 优化-固定支出：分组详情页新增固定支出明细模块 -->
-      <div class="card">
-        <div class="card-head"><h2><span class="dot" style="background:var(--primary)"></span>固定支出明细</h2></div>
-        <ul id="gdFixedList"></ul>
+        <div class="card-head"><h2 id="gdRecListTitle"><span class="dot" style="background:var(--primary)"></span>日常消费明细</h2></div>
+        <ul id="gdRecList"></ul>
       </div>
       <div class="card">
         <div class="card-head"><h2><span class="dot"></span>周期对比（上一周期）</h2></div>
@@ -1483,10 +1478,11 @@ function renderGroupDetail() {
     cur = addDays(cur, 1);
   }
   $('#gdBar').innerHTML = svgBars(days);
-  /* 大额消费明细 */
-  bindRecList('#gdLargeList', recs.filter(r => r.mode === 'large'));
-  // 优化-固定支出：分组详情页固定支出明细模块
-  bindRecList('#gdFixedList', recs.filter(r => r.isFixed));
+  /* 消费明细（随 Tab 切换） */
+  const tabLabels = { daily: '日常消费明细', large: '大额消费明细', fixed: '固定支出明细', all: '全部消费明细' };
+  const tabColors = { daily: 'var(--primary)', large: 'var(--orange)', fixed: 'var(--red)', all: 'var(--muted)' };
+  $('#gdRecListTitle').innerHTML = `<span class="dot" style="background:${tabColors[gdCatMode]}"></span>${tabLabels[gdCatMode]}`;
+  bindRecList('#gdRecList', modeRecs);
   /* 周期对比（上一个等长周期） */
   const span = dayDiff(g.startDate, g.endDate) + 1;
   const pStart = addDays(g.startDate, -span), pEnd = addDays(g.startDate, -1);
