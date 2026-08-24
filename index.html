@@ -261,14 +261,6 @@ main{flex:1;padding:12px 12px 16px;padding-bottom:calc(84px + env(safe-area-inse
 .fx-row{display:flex;gap:6px;margin-bottom:8px;align-items:center}
 .fx-row input{padding:8px}
 .fx-row .fx-del{width:38px;height:38px;border-radius:9px;background:var(--red-bg);color:var(--red);flex:0 0 auto;font-size:16px}
-/* 优化-固定支出：分组弹窗内固定支出卡片式列表 */
-.fx-card{background:var(--card2);border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;border:1px solid var(--line)}
-.fx-card .fx-icon{font-size:22px;flex:0 0 auto}
-.fx-card .fx-info{flex:1;min-width:0}
-.fx-card .fx-name{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.fx-card .fx-meta{font-size:11px;color:var(--muted);margin-top:1px}
-.fx-card .fx-amt{font-size:15px;font-weight:700;color:var(--red);flex:0 0 auto}
-.fx-card .fx-del{width:32px;height:32px;border-radius:8px;background:var(--red-bg);color:var(--red);display:flex;align-items:center;justify-content:center;flex:0 0 auto;font-size:14px}
 
 /* 备份列表 */
 .bk-item{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px dashed var(--line)}
@@ -655,23 +647,7 @@ svg text{font-family:inherit}
     <div class="field-col" style="margin-bottom:10px">
       <label class="field-label">固定支出（前置扣除，不占用可用预算；到达扣款日自动生成记录）</label>
       <div id="mgFixedList"></div>
-      <!-- 优化-固定支出：新增固定支出弹窗 -->
       <button class="btn-mini" id="mgAddFixed" style="margin-top:2px">＋ 添加固定支出</button>
-      <div class="modal-mask" id="modalFxItem">
-        <div class="modal" style="max-width:340px">
-          <div class="modal-head"><h3 id="mgFxTitle">添加固定支出</h3><button class="modal-close" data-close="modalFxItem">✕</button></div>
-          <div class="field-row"><div class="field-col"><label class="field-label">图标</label><select id="mgFxIcon" style="width:100%"></select></div></div>
-          <div class="field-row"><div class="field-col"><label class="field-label">名称</label><input type="text" id="mgFxName" maxlength="20" placeholder="如：房租"></div></div>
-          <div class="field-row">
-            <div class="field-col"><label class="field-label">金额 ¥</label><input type="number" id="mgFxAmount" inputmode="decimal" min="0" placeholder="0.00"></div>
-            <div class="field-col"><label class="field-label">每月几号扣款</label><input type="number" id="mgFxPayDay" inputmode="numeric" min="1" max="31" placeholder="1-31"></div>
-          </div>
-          <div class="form-footer">
-            <button class="btn-ghost" id="mgFxCancel">取消</button>
-            <button class="btn-primary" id="mgFxSave">确认</button>
-          </div>
-        </div>
-      </div>
     </div>
     <div class="field-row">
       <div class="field-col"><label class="field-label">可用预算 ¥</label><input type="number" id="mgBudget" inputmode="decimal" min="0" placeholder="0.00"></div>
@@ -1490,6 +1466,7 @@ function renderGroupDetail() {
     if (r.type !== 'expense') return false;
     if (gdCatMode === 'all') return true;
     if (gdCatMode === 'fixed') return r.isFixed;
+    if (gdCatMode === 'daily') return !r.isFixed;
     return r.mode === gdCatMode;
   });
   const catItems = Object.entries(Calc.summarize(modeRecs).byCat).sort((a, b) => b[1] - a[1])
@@ -1736,15 +1713,18 @@ function openGroupModal(id) {
   $('#modalGroup').classList.add('show');
 }
 function renderMgForm() {
-  // 优化-固定支出：卡片式列表渲染
-  const fxIcons = ['🔒','🏠','💡','📱','🚗','🍜','🛒','💊','📚','⚡','🎯','📦'];
+  // 固定支出内联行渲染（恢复为内联输入行，不用弹窗）
   $('#mgFixedList').innerHTML = mg.fixed.length ? mg.fixed.map((f, i) =>
-    `<div class="fx-card" data-fi="${i}">
-      <span class="fx-icon">${f.icon || '🔒'}</span>
-      <div class="fx-info"><div class="fx-name">${esc(f.name)}</div><div class="fx-meta">${f.payDay ? '每月' + f.payDay + '号扣款' : ''}</div></div>
-      <div class="fx-amt">¥${money(f.amount)}</div>
-      <button class="fx-del" data-fdel="${i}" aria-label="删除">✕</button>
+    `<div class="fx-row">
+      <input type="text" value="${esc(f.icon || '🔒')}" data-fx="${i}" data-fkf="icon" style="flex:0 0 40px;text-align:center;font-size:18px;cursor:pointer" title="点击换图标" />
+      <input type="text" value="${esc(f.name)}" data-fx="${i}" data-fkf="name" maxlength="20" placeholder="名称" style="flex:1.4" />
+      <input type="number" value="${f.amount}" data-fx="${i}" data-fkf="amount" inputmode="decimal" placeholder="金额" style="flex:1" />
+      <input type="number" value="${f.payDay}" data-fx="${i}" data-fkf="payDay" inputmode="numeric" min="1" max="31" placeholder="扣款日" style="flex:0 0 60px" />
+      <button class="fx-del" data-fdel="${i}">✕</button>
     </div>`).join('') : '<div class="empty-tip">暂无固定支出，点击「添加」录入</div>';
+  $('#mgFixedList').querySelectorAll('[data-fkf]').forEach(el => {
+    el.oninput = () => { mg.fixed[+el.dataset.fx][el.dataset.fkf] = el.value.trim(); updateMgFormula(); };
+  });
   $('#mgFixedList').querySelectorAll('[data-fdel]').forEach(b => b.onclick = () => { mg.fixed.splice(+b.dataset.fdel, 1); renderMgForm(); });
   $('#mgCatBudgetList').innerHTML = mg.catBudgets.map((c, i) =>
     `<div class="fx-row">
@@ -1764,17 +1744,27 @@ function updateMgFormula() {
   $('#mgFormula').innerHTML = `核算公式：周期可支配 = 工资 − 固定支出 = <b>¥${money(salary - fx)}</b>；可支配拆分 = 可用预算 + 储蓄目标 = <b>¥${money(budget + sav)}</b>。支出先扣可用预算，超出部分动用储蓄。`;
 }
 ['mgSalary'].forEach(id => $('#' + id).oninput = updateMgFormula);
-// 优化-固定支出：点击新增弹出卡片编辑弹窗
-const mgFx = { editIdx: -1 };
-$('#mgAddFixed').onclick = () => { mgFx.editIdx = -1; $('#mgFxTitle').textContent = '添加固定支出'; $('#mgFxIcon').value = '🔒'; $('#mgFxName').value = ''; $('#mgFxAmount').value = ''; $('#mgFxPayDay').value = ''; const opts = ['🔒','🏠','💡','📱','🚗','🍜','🛒','💊','📚','⚡','🎯','📦']; $('#mgFxIcon').innerHTML = opts.map(o => `<option value="${o}">${o}</option>`).join(''); document.getElementById('modalFxItem').classList.add('show'); };
-$('#mgFxCancel').onclick = () => { document.getElementById('modalFxItem').classList.remove('show'); };
-$('#mgFxSave').onclick = () => {
-  const icon = $('#mgFxIcon').value, name = $('#mgFxName').value.trim(), amount = Number($('#mgFxAmount').value) || 0, payDay = Math.min(31, Math.max(1, Number($('#mgFxPayDay').value) || 1));
-  if (!name) return toast('请输入名称', true);
-  if (amount <= 0) return toast('请输入金额', true);
-  if (mgFx.editIdx >= 0) { mg.fixed[mgFx.editIdx] = { icon, name, amount, payDay }; } else { mg.fixed.push({ icon, name, amount, payDay }); }
-  $('#modalFxItem').style.display = 'none'; renderMgForm();
-};
+  // 固定支出添加按钮：追加一行空输入行
+  $('#mgAddFixed').onclick = () => {
+    mg.fixed.push({ icon: '🔒', name: '', amount: 0, payDay: 1 });
+    renderMgForm();
+    // 聚焦到新增行的名称输入框
+    setTimeout(() => {
+      const lastInput = $('#mgFixedList').querySelectorAll('[data-fkf="name"]')[mg.fixed.length - 1];
+      if (lastInput) lastInput.focus();
+    }, 50);
+  };
+  // 图标单元格点击切换
+  $('#mgFixedList').querySelectorAll('[data-fkf="icon"]').forEach(el => {
+    el.onclick = (e) => {
+      e.preventDefault();
+      const i = +el.dataset.fx;
+      const icons = ['🔒','🏠','💡','📱','🚗','🍜','🛒','💊','📚','⚡','🎯','📦'];
+      const cur = icons.indexOf(el.value);
+      el.value = icons[(cur + 1) % icons.length];
+      mg.fixed[i].icon = el.value;
+    };
+  });
 $('#mgAddCatBudget').onclick = () => { mg.catBudgets.push({ category: Store.data.category_config.expense[0], amount: 0 }); renderMgForm(); };
 $('#mgSave').onclick = () => {
   const name = $('#mgName').value.trim();
