@@ -1458,10 +1458,9 @@ function renderGroupDetail() {
   /* 分类占比（日常/大额/固定/合计四种口径） */
   $$('#gdCatSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === gdCatMode));
   const modeRecs = recs.filter(r => {
-    if (r.type !== 'expense') return false;
-    if (gdCatMode === 'all') return true;
+    if (gdCatMode === 'all') return r.type === 'expense';
     if (gdCatMode === 'fixed') return r.isFixed;
-    if (gdCatMode === 'daily') return !r.isFixed;
+    if (gdCatMode === 'daily') return r.mode === 'daily';
     return r.mode === gdCatMode;
   });
   const catItems = Object.entries(Calc.summarize(modeRecs).byCat).sort((a, b) => b[1] - a[1])
