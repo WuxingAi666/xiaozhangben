@@ -1460,7 +1460,7 @@ function renderGroupDetail() {
   const modeRecs = recs.filter(r => {
     if (gdCatMode === 'all') return r.type === 'expense';
     if (gdCatMode === 'fixed') return r.isFixed;
-    if (gdCatMode === 'daily') return r.mode === 'daily';
+    if (gdCatMode === 'daily') return r.mode === 'daily' && !r.isFixed;
     return r.mode === gdCatMode;
   });
   const catItems = Object.entries(Calc.summarize(modeRecs).byCat).sort((a, b) => b[1] - a[1])
