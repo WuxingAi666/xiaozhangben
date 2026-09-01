@@ -920,11 +920,13 @@ const Calc = {
   budgetState(group) {
     const recs = Store.records.filter(r => r.groupIds.includes(group.id));
     const sum = this.summarize(recs);
-    const flexible = sum.expense - sum.fixedExp;               // 参与预算扣减的消费
-    const pool = group.availableBudget + sum.income;            // 可用预算池 = 配置额度 + 周期内收入记录
+    // 用配置的固定支出总额，避开历史重复记录造成的污染
+    const fixedCfg = (group.fixedExpenses || []).reduce((a, f) => a + f.amount, 0);
+    const flexible = sum.dailyExp + sum.largeExp;                 // 参与预算扣减的消费（仅非固定支出）
+    const pool = group.availableBudget + sum.income;               // 可用预算池 = 配置额度 + 周期内收入记录
     const budgetUsed = Math.min(flexible, pool);
     const budgetLeft = pool - budgetUsed;
-    const savingsUsed = Math.max(0, flexible - pool);           // 超支部分啃储蓄
+    const savingsUsed = Math.max(0, flexible - pool);              // 超支部分啃储蓄
     const savingsLeft = Math.max(0, group.savingsTarget - savingsUsed);
     const ratio = pool > 0 ? budgetLeft / pool : 1;
     const level = savingsUsed > 0 ? 'danger' : (pool > 0 && ratio < 0.2 ? 'warn' : 'ok');
@@ -934,7 +936,7 @@ const Calc = {
       const used = sum.byCat[cb.category] || 0;
       if (used > cb.amount) catOver.push({ ...cb, used });
     });
-    const disposable = group.salary - sum.fixedExp - group.savingsTarget; // 周期可支配参考
+    const disposable = group.salary - fixedCfg - group.savingsTarget; // 周期可支配参考（基于配置的固定支出）
     return { sum, flexible, pool, budgetUsed, budgetLeft, savingsUsed, savingsLeft, ratio, level, catOver, disposable };
   }
 };
@@ -1230,9 +1232,9 @@ function renderHome() {
           <div><div class="pp-name">${esc(g.name)}</div><div class="pp-range">${g.startDate} ~ ${g.endDate} · 点击查看详情 ›</div></div>
         </div>
         <div class="pp-grid">
-          <div class="pp-cell"><div class="k">时段支出</div><div class="v">¥${money(bs.sum.expense)}</div></div>
+          <div class="pp-cell"><div class="k">时段支出</div><div class="v">¥${money(bs.sum.dailyExp + bs.sum.largeExp + ((g.fixedExpenses || []).reduce((a,f)=>a+f.amount,0)))}</div></div>
           <div class="pp-cell"><div class="k">大额消费</div><div class="v">¥${money(bs.sum.largeExp)}</div></div>
-          <div class="pp-cell"><div class="k">日均消费</div><div class="v">¥${money(avg.avg)}</div></div>
+          <div class="pp-cell"><div class="k">日均消费</div><div class="v">¥${money(bs.flexible / avg.elapsed)}</div></div>
           <div class="pp-cell"><div class="k">预算剩余</div><div class="v" style="color:${bs.level === 'danger' ? 'var(--red)' : bs.level === 'warn' ? 'var(--orange)' : 'var(--green)'}">¥${money(bs.budgetLeft)}</div></div>
         </div>
       </div>`;
@@ -1334,19 +1336,24 @@ function renderStats() {
   if (excludeLarge) recs = recs.filter(r => r.mode !== 'large');
   const sum = Calc.summarize(recs);
   const avg = Calc.dailyAvg(sum, start, end);
+  // 修正总支出：用配置的固定支出总额替代 sum.fixedExp（避免重复记录造成天文数字）
+  const statGroup = (st.dim === 'group' && st.groupId) ? Store.groups.find(x => x.id === st.groupId) : null;
+  const statFixedCfg = statGroup ? (statGroup.fixedExpenses || []).reduce((a, f) => a + f.amount, 0) : 0;
+  const cleanExpense = sum.dailyExp + sum.largeExp + statFixedCfg;
+  const cleanNet = sum.income - cleanExpense;
 
   /* 概览四格 */
   $('#statGrid').innerHTML = `
-    <div class="stat-cell"><div class="k">总支出</div><div class="v exp">¥${money(sum.expense)}</div></div>
+    <div class="stat-cell"><div class="k">总支出</div><div class="v exp">¥${money(cleanExpense)}</div></div>
     <div class="stat-cell"><div class="k">总收入</div><div class="v inc">¥${money(sum.income)}</div></div>
-    <div class="stat-cell"><div class="k">结余</div><div class="v" style="color:${sum.net >= 0 ? 'var(--green)' : 'var(--red)'}">¥${money(sum.net)}</div></div>
-    <div class="stat-cell"><div class="k">日均消费</div><div class="v">¥${money(st.dim === 'day' ? sum.expense : avg.avg)}</div></div>`;
+    <div class="stat-cell"><div class="k">结余</div><div class="v" style="color:${cleanNet >= 0 ? 'var(--green)' : 'var(--red)'}">¥${money(cleanNet)}</div></div>
+    <div class="stat-cell"><div class="k">日均消费</div><div class="v">¥${money(st.dim === 'day' ? cleanExpense : (sum.dailyExp / Math.max(1, avg.elapsed)))}</div></div>`;
 
   /* 饼图（分类支出占比）+ 图例（点击展开分类明细） */
   const catItems = Object.entries(sum.byCat).sort((a, b) => b[1] - a[1])
     .map(([label, value]) => ({ label, value, color: catColor(label) }));
   $('#pieBox').innerHTML = svgPie(catItems);
-  const totalExp = sum.expense || 1;
+  const totalExp = cleanExpense || 1;
   $('#pieLegend').innerHTML = catItems.map(it =>
     `<button class="lg-item" data-cat="${esc(it.label)}"><i style="background:${it.color}"></i>${esc(it.label)} ¥${money(it.value)}<span class="lg-pct">${Math.round(it.value / totalExp * 100)}%</span></button>`).join('')
     || '<div class="empty-tip">暂无支出</div>';
@@ -1407,8 +1414,8 @@ function renderGroups() {
           <span class="gc-status ${status[0]}">${status[1]}</span>
         </div>
         <div class="gc-stats">
-          <div class="pp-cell"><div class="k">总支出</div><div class="v">¥${money(bs.sum.expense)}</div></div>
-          <div class="pp-cell"><div class="k">日均</div><div class="v">¥${money(avg.avg)}</div></div>
+          <div class="pp-cell"><div class="k">总支出</div><div class="v">¥${money(bs.sum.dailyExp + bs.sum.largeExp + ((g.fixedExpenses || []).reduce((a,f)=>a+f.amount,0)))}</div></div>
+          <div class="pp-cell"><div class="k">日均</div><div class="v">¥${money(bs.flexible / avg.elapsed)}</div></div>
           <div class="pp-cell"><div class="k">预算剩余</div><div class="v" style="color:${bs.level === 'danger' ? 'var(--red)' : bs.level === 'warn' ? 'var(--orange)' : 'var(--green)'}">¥${money(bs.budgetLeft)}</div></div>
         </div>
       </div>`;
@@ -1430,19 +1437,23 @@ function renderGroupDetail() {
   const sum = Calc.summarize(recs);
   const avg = Calc.dailyAvg(sum, g.startDate, g.endDate);
   const bs = Calc.budgetState(g);
+  // 真实总支出：用配置的固定支出总额替代 sum.fixedExp（避免历史重复记录导致天文数字）
+  const realFixedExp = (g.fixedExpenses || []).reduce((a, f) => a + f.amount, 0);
+  const realExpense = sum.dailyExp + sum.largeExp + realFixedExp;
+  const realNet = sum.income - realExpense;
   $('#gdGrid').innerHTML = `
-    <div class="stat-cell"><div class="k">总支出</div><div class="v exp">¥${money(sum.expense)}</div></div>
+    <div class="stat-cell"><div class="k">总支出</div><div class="v exp">¥${money(realExpense)}</div></div>
     <div class="stat-cell"><div class="k">总收入</div><div class="v inc">¥${money(sum.income)}</div></div>
-    <div class="stat-cell"><div class="k">结余</div><div class="v" style="color:${sum.net >= 0 ? 'var(--green)' : 'var(--red)'}">¥${money(sum.net)}</div></div>
-    <div class="stat-cell"><div class="k">日均·口径A</div><div class="v">¥${money(avg.avg)}</div></div>`;
+    <div class="stat-cell"><div class="k">结余</div><div class="v" style="color:${realNet >= 0 ? 'var(--green)' : 'var(--red)'}">¥${money(realNet)}</div></div>
+    <div class="stat-cell"><div class="k">日均·口径A</div><div class="v">¥${money(sum.dailyExp / Math.max(1, avg.elapsed))}</div></div>`;
   /* 预算与储蓄 */
   const fixedTotal = (g.fixedExpenses || []).reduce((a, f) => a + f.amount, 0);
   const barColor = bs.level === 'danger' ? 'var(--red)' : bs.level === 'warn' ? 'var(--orange)' : 'var(--primary)';
   $('#gdBudget').innerHTML = `
     <div class="gc-stats">
       <div class="pp-cell"><div class="k">周期工资</div><div class="v">¥${money(g.salary)}</div></div>
-      <div class="pp-cell"><div class="k">固定支出</div><div class="v">¥${money(sum.fixedExp)}</div></div>
-      <div class="pp-cell"><div class="k">可支配</div><div class="v">¥${money(g.salary - sum.fixedExp)}</div></div>
+      <div class="pp-cell"><div class="k">固定支出</div><div class="v">¥${money(fixedTotal)}</div></div>
+      <div class="pp-cell"><div class="k">可支配</div><div class="v">¥${money(g.salary - fixedTotal)}</div></div>
       <div class="pp-cell"><div class="k">储蓄剩余</div><div class="v" style="color:${bs.savingsUsed > 0 ? 'var(--red)' : 'var(--green)'}">¥${money(bs.savingsLeft)}</div></div>
     </div>
     <div style="margin-top:10px;font-size:12px;color:var(--muted)">可用预算（¥${money(g.availableBudget)} + 收入 ¥${money(sum.income)}）</div>
@@ -1454,7 +1465,7 @@ function renderGroupDetail() {
       <span style="color:${bs.level === 'ok' ? 'var(--green)' : 'var(--red)'};font-weight:700">剩余 ¥${money(bs.budgetLeft)}${bs.savingsUsed > 0 ? ` · 已动用储蓄 ¥${money(bs.savingsUsed)}` : ''}</span>
     </div>
     ${bs.catOver.length ? `<div style="margin-top:8px;background:var(--red-bg);border-radius:10px;padding:8px 10px;font-size:12px;color:var(--red);font-weight:600">⚠ 分类超支：${bs.catOver.map(c => `${c.category} ¥${money(c.used)}/${money(c.amount)}`).join('；')}</div>` : ''}
-    ${(g.fixedExpenses || []).length ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">固定支出：${g.fixedExpenses.map(f => `${f.name} ¥${money(f.amount)}（${f.payDay}号）`).join(' · ')}</div>` : ''}`;
+    ${(g.fixedExpenses || []).length ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">固定支出：¥${money(fixedTotal)}/月（${g.fixedExpenses.length}项）</div>` : ''}`;
   /* 分类占比（日常/大额/固定/合计四种口径） */
   $$('#gdCatSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === gdCatMode));
   const modeRecs = recs.filter(r => {
@@ -1486,12 +1497,14 @@ function renderGroupDetail() {
   const span = dayDiff(g.startDate, g.endDate) + 1;
   const pStart = addDays(g.startDate, -span), pEnd = addDays(g.startDate, -1);
   const pSum = Calc.summarize(Calc.recordsInRange(pStart, pEnd));
-  const diff = sum.expense - pSum.expense;
+  // 同样用「非固定支出」+ 配置固定支出计算，避开重复记录造成的脏数据
+  const pRealExpense = pSum.dailyExp + pSum.largeExp;
+  const diff = realExpense - pRealExpense;
   const topCats = Object.entries(sum.byCat).sort((a, b) => b[1] - a[1]).slice(0, 3);
   $('#gdCompare').innerHTML = `
     <div class="gc-stats">
       <div class="pp-cell"><div class="k">上一周期</div><div class="v" style="font-size:11px">${pStart.slice(5)}~${pEnd.slice(5)}</div></div>
-      <div class="pp-cell"><div class="k">上期支出</div><div class="v">¥${money(pSum.expense)}</div></div>
+      <div class="pp-cell"><div class="k">上期支出</div><div class="v">¥${money(pRealExpense)}</div></div>
       <div class="pp-cell"><div class="k">本期对比</div><div class="v" style="color:${diff > 0 ? 'var(--red)' : 'var(--green)'}">${diff > 0 ? '+' : ''}${money(diff)}</div></div>
     </div>
     ${topCats.length ? `<div style="margin-top:8px;font-size:12px;color:var(--muted);line-height:1.8">本期分类 Top：${topCats.map(([c, v]) => `${c} ¥${money(v)}（上期 ¥${money(pSum.byCat[c] || 0)}）`).join(' · ')}</div>` : ''}`;
