@@ -2103,20 +2103,23 @@ $('#btnBackupList').onclick = () => {
 };
 /* 数据健康检查：检测并修复天文数字等异常 */
 function scanDataHealth() {
-  const issues = { bigFixedItems: [], dupFixedRecords: 0, bigNormalRecords: [] };
-  /* 1. 检测固定支出配置中异常大额（金额 > ¥10,000/月 或 同组内单项金额 > 其余项 5 倍以上） */
+  const issues = { bigFixedItems: [], bigFixedTotals: [], dupFixedRecords: 0, bigNormalRecords: [] };
+  /* 1. 检测固定支出配置中异常大额（任意单项 > ¥3,000 或 fixedTotal > ¥10,000） */
   Store.groups.forEach(g => {
     const fx = g.fixedExpenses || [];
     if (fx.length === 0) return;
     const amounts = fx.map(f => f.amount || 0);
-    const max = Math.max(...amounts);
-    const avg = amounts.reduce((a, b) => a + b, 0) / amounts.length;
+    const total = amounts.reduce((a, b) => a + b, 0);
+    /* 规则 A：单项金额 > ¥3,000 视为异常（绝大多数固定支出金额都 < ¥3,000） */
     fx.forEach((f, i) => {
-      const isSuspect = f.amount > 10000 || (max > 5000 && f.amount > avg * 5);
-      if (isSuspect) {
+      if (f.amount > 3000) {
         issues.bigFixedItems.push({ groupName: g.name, groupId: g.id, itemName: f.name, itemIdx: i, amount: f.amount });
       }
     });
+    /* 规则 B：固定支出总额 > ¥10,000 视为异常 */
+    if (total > 10000) {
+      issues.bigFixedTotals.push({ groupName: g.name, groupId: g.id, total, count: fx.length });
+    }
   });
   /* 2. 检测重复固定支出记录（同 groupId + name + date） */
   const seen = new Map();
@@ -2129,10 +2132,10 @@ function scanDataHealth() {
       seen.set(key, r);
     }
   });
-  /* 3. 检测非固定消费中异常大额记录（amount > ¥10,000 单笔） */
+  /* 3. 检测非固定消费中异常大额记录（amount > ¥3,000 单笔，超过正常消费范围） */
   Store.records.forEach(r => {
     if (r.type !== 'expense' || r.isFixed) return;
-    if (r.amount > 10000) {
+    if (r.amount > 3000) {
       issues.bigNormalRecords.push({ id: r.id, amount: r.amount, category: r.category, date: r.date, note: r.note });
     }
   });
@@ -2141,12 +2144,23 @@ function scanDataHealth() {
 
 function openDataHealthDialog() {
   const issues = scanDataHealth();
-  const total = issues.bigFixedItems.length + issues.dupFixedRecords + issues.bigNormalRecords.length;
+  const total = issues.bigFixedItems.length + issues.bigFixedTotals.length + issues.dupFixedRecords + issues.bigNormalRecords.length;
   let html = `<div style="line-height:1.8">`;
   html += `<div style="margin-bottom:10px;font-size:12px;color:var(--muted)">检测到 <b style="color:var(--red)">${total}</b> 项异常数据，按下面提示处理：</div>`;
-  /* 1. 异常固定支出配置 */
+  /* 1. 异常固定支出总额 */
+  if (issues.bigFixedTotals.length) {
+    html += `<div style="margin-bottom:10px"><div style="font-weight:700;color:var(--red);margin-bottom:6px">⚠ 固定支出总额异常（${issues.bigFixedTotals.length}个分组）</div>`;
+    issues.bigFixedTotals.forEach(t => {
+      html += `<div style="background:var(--red-bg);border-radius:8px;padding:8px;margin-bottom:4px;font-size:12px">
+        <div><b>${esc(t.groupName)}</b> · 共 ${t.count} 项，配置总额：<b style="color:var(--red)">¥${money(t.total)}/月</b></div>
+        <div style="margin-top:4px"><button class="btn-mini dh-eval-fx" data-gid="${t.groupId}">查看明细并修复</button></div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  /* 2. 异常固定支出配置 */
   if (issues.bigFixedItems.length) {
-    html += `<div style="margin-bottom:10px"><div style="font-weight:700;color:var(--red);margin-bottom:6px">⚠ 固定支出配置中异常大额（${issues.bigFixedItems.length}项）</div>`;
+    html += `<div style="margin-bottom:10px"><div style="font-weight:700;color:var(--red);margin-bottom:6px">⚠ 固定支出单项金额过大（${issues.bigFixedItems.length}项）</div>`;
     issues.bigFixedItems.forEach((it, idx) => {
       html += `<div style="background:var(--red-bg);border-radius:8px;padding:8px;margin-bottom:4px;font-size:12px">
         <div><b>${esc(it.groupName)}</b> · 第 ${it.itemIdx + 1} 项：${esc(it.itemName)}</div>
@@ -2156,12 +2170,12 @@ function openDataHealthDialog() {
     });
     html += `</div>`;
   }
-  /* 2. 重复固定支出记录 */
+  /* 3. 重复固定支出记录 */
   if (issues.dupFixedRecords) {
     html += `<div style="margin-bottom:10px"><div style="font-weight:700;color:var(--orange);margin-bottom:6px">⚠ 重复的固定支出记录：${issues.dupFixedRecords} 条</div>`;
     html += `<button class="btn-mini" id="dhCleanDup">一键去重（保留最早的）</button></div>`;
   }
-  /* 3. 异常大额普通记录 */
+  /* 4. 异常大额普通记录 */
   if (issues.bigNormalRecords.length) {
     html += `<div style="margin-bottom:10px"><div style="font-weight:700;color:var(--red);margin-bottom:6px">⚠ 单笔金额过大的普通消费（${issues.bigNormalRecords.length}条）</div>`;
     issues.bigNormalRecords.forEach(r => {
@@ -2176,7 +2190,7 @@ function openDataHealthDialog() {
   if (total === 0) {
     html += `<div style="color:var(--green);text-align:center;padding:20px">✓ 数据健康，未发现异常</div>`;
   }
-  html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)">数据健康判定规则：固定支出单月金额 > ¥10,000 或同组单项超过其他项平均 5 倍以上视为异常。重复记录按（groupId+name+date）去重。</div></div>`;
+  html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)">判定规则：固定支出单项 > ¥3,000 或总额 > ¥10,000 视为异常；单笔普通消费 > ¥3,000 视为异常；重复记录按（groupId+name+date）去重。</div></div>`;
   showModalBox('数据健康检查', html);
   /* 绑定按钮事件 */
   setTimeout(() => {
@@ -2191,6 +2205,11 @@ function openDataHealthDialog() {
     $$('.dh-del-rec').forEach(b => b.onclick = () => {
       Store.records = Store.records.filter(r => r.id !== b.dataset.id);
       Store.save('account_records'); toast('已删除'); openDataHealthDialog(); renderAll();
+    });
+    $$('.dh-eval-fx').forEach(b => b.onclick = () => {
+      /* 跳转到该分组的编辑弹窗，让用户自己确认修改 */
+      openGroupModal(b.dataset.gid);
+      $('#modalGeneric').classList.remove('show');
     });
     const dupBtn = $('#dhCleanDup');
     if (dupBtn) dupBtn.onclick = () => {
