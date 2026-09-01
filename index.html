@@ -1752,7 +1752,13 @@ function renderMgForm() {
       <button class="fx-del" data-fdel="${i}">✕</button>
     </div>`).join('') : '<div class="empty-tip">暂无固定支出，点击「添加」录入</div>';
   $('#mgFixedList').querySelectorAll('[data-fkf]').forEach(el => {
-    el.oninput = () => { mg.fixed[+el.dataset.fx][el.dataset.fkf] = el.value.trim(); updateMgFormula(); };
+    // 修复：金额字段必须转为 Number，否则字符串拼接导致天文数字
+    el.oninput = () => {
+      const key = el.dataset.fkf;
+      const val = key === 'amount' || key === 'payDay' ? Number(el.value) || 0 : el.value.trim();
+      mg.fixed[+el.dataset.fx][key] = val;
+      updateMgFormula();
+    };
   });
   $('#mgFixedList').querySelectorAll('[data-fdel]').forEach(b => b.onclick = () => { mg.fixed.splice(+b.dataset.fdel, 1); renderMgForm(); });
   $('#mgCatBudgetList').innerHTML = mg.catBudgets.map((c, i) =>
