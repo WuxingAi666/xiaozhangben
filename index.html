@@ -294,7 +294,7 @@ svg text{font-family:inherit}
   <!-- ============ 顶部栏 ============ -->
   <header class="app-header">
     <div>
-      <div class="header-title"><span class="star">★</span> 仵星的记账本</div>
+      <div class="header-title"><span class="star">★</span> <span id="appNameHeader">仵星的记账本</span></div>
       <div class="header-sub" id="headerDate"></div>
     </div>
     <button class="theme-toggle" id="btnTheme" aria-label="切换深色模式"></button>
@@ -545,11 +545,6 @@ svg text{font-family:inherit}
           <div><div class="si-name">清空示例数据</div><div class="si-desc">仅删除预置示例（记账/待办/分组/模板）</div></div></div>
           <span class="si-right">›</span>
         </div>
-        <div class="set-item" id="btnDataHealth">
-          <div class="si-left"><div class="si-icon" style="background:var(--red-bg);color:var(--red)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 21h20z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></div>
-          <div><div class="si-name">数据健康检查</div><div class="si-desc" id="dhDesc">检测重复记录与异常金额</div></div></div>
-          <span class="si-right">›</span>
-        </div>
         <div class="set-item danger-item" id="btnClearAll">
           <div class="si-left"><div class="si-icon" style="background:var(--red-bg);color:var(--red)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg></div>
           <div><div class="si-name">清空所有数据</div><div class="si-desc">危险操作，需二次确认</div></div></div>
@@ -557,6 +552,11 @@ svg text{font-family:inherit}
       </div>
       <div class="set-group">
         <div class="sg-title">显示设置</div>
+        <div class="set-item">
+          <div class="si-left"><div class="si-icon" style="background:var(--primary-bg);color:var(--primary)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h7"/></svg></div>
+          <div><div class="si-name">记账本名称</div><div class="si-desc">自定义首页与标题显示名称</div></div></div>
+          <input id="setAppName" maxlength="20" placeholder="仵星的记账本" style="width:130px;min-height:38px;font-size:13px;text-align:right;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);outline:none">
+        </div>
         <div class="set-item">
           <div class="si-left"><div class="si-icon" style="background:var(--primary-bg);color:var(--primary)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg></div>
           <div><div class="si-name">深色模式</div></div></div>
@@ -573,7 +573,7 @@ svg text{font-family:inherit}
       <div class="set-group">
         <div class="sg-title">关于</div>
         <div class="set-item">
-          <div class="si-left"><div><div class="si-name">仵星的记账本</div><div class="si-desc">v1.0 · 离线优先 · 数据完全本地存储</div></div></div>
+          <div class="si-left"><div><div class="si-name" id="appNameAbout">仵星的记账本</div><div class="si-desc">v1.0 · 离线优先 · 数据完全本地存储</div></div></div>
           <span class="si-right">★</span>
         </div>
       </div>
@@ -815,6 +815,18 @@ const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const sumAmount = list => (list || []).reduce((a, x) => a + (x && x.amount != null ? num(x.amount) : num(x)), 0);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const deep = o => JSON.parse(JSON.stringify(o));
+/* 应用名称：优先取用户在 system_settings 中自定义的值，空白时回退默认名 */
+const getAppName = () => {
+  const v = Store.data && Store.data.system_settings && Store.data.system_settings.appName;
+  return (v && String(v).trim()) ? String(v).trim() : '仵星的记账本';
+};
+/* 将当前应用名称写入页面标题、首页页头与「关于」页；空白回退默认名 */
+function applyAppName() {
+  const name = getAppName();
+  document.title = name;
+  const h = $('#appNameHeader'); if (h) h.textContent = name;
+  const a = $('#appNameAbout'); if (a) a.textContent = name;
+}
 
 /* ---------- 分类图标：emoji 更生动，手机辨识度高 ---------- */
 const CAT_EMOJIS = {
@@ -2095,7 +2107,7 @@ function downloadFile(name, content, mime) {
 }
 /* 导出 JSON 完整备份 */
 $('#btnExportJson').onclick = () => {
-  downloadFile(`仵星的记账本-备份-${todayStr()}.json`, JSON.stringify(Store.snapshot(), null, 2), 'application/json');
+  downloadFile(`${getAppName()}-备份-${todayStr()}.json`, JSON.stringify(Store.snapshot(), null, 2), 'application/json');
   toast('JSON 备份已导出');
 };
 /* 导出 CSV（Excel 兼容 BOM） */
@@ -2106,7 +2118,7 @@ $('#btnExportCsv').onclick = () => {
     (r.tags || []).join(' '), (r.note || '').replace(/[,\"\n]/g, ' '),
     r.groupIds.map(id => (Calc.getGroup(id) || { name: '已删除分组' }).name).join(' ')
   ].join(','));
-  downloadFile(`仵星的记账本-明细-${todayStr()}.csv`, '\uFEFF' + [head, ...rows].join('\n'), 'text/csv');
+  downloadFile(`${getAppName()}-明细-${todayStr()}.csv`, '\uFEFF' + [head, ...rows].join('\n'), 'text/csv');
   toast('CSV 明细已导出');
 };
 /* 导入 JSON：先校验，失败不破坏原数据 */
@@ -2141,148 +2153,6 @@ $('#btnBackupList').onclick = () => {
   });
   $('#modalBackup').classList.add('show');
 };
-/* 数据健康检查：检测并修复天文数字等异常 */
-function scanDataHealth() {
-  const issues = { bigFixedItems: [], bigFixedTotals: [], dupFixedRecords: 0, bigNormalRecords: [] };
-  /* 1. 检测固定支出配置中异常大额（任意单项 > ¥3,000 或 fixedTotal > ¥10,000） */
-  Store.groups.forEach(g => {
-    const fx = g.fixedExpenses || [];
-    if (fx.length === 0) return;
-    const amounts = fx.map(f => f.amount || 0);
-    const total = amounts.reduce((a, b) => a + b, 0);
-    /* 规则 A：单项金额 > ¥3,000 视为异常（绝大多数固定支出金额都 < ¥3,000） */
-    fx.forEach((f, i) => {
-      if (f.amount > 3000) {
-        issues.bigFixedItems.push({ groupName: g.name, groupId: g.id, itemName: f.name, itemIdx: i, amount: f.amount });
-      }
-    });
-    /* 规则 B：固定支出总额 > ¥10,000 视为异常 */
-    if (total > 10000) {
-      issues.bigFixedTotals.push({ groupName: g.name, groupId: g.id, total, count: fx.length });
-    }
-  });
-  /* 2. 检测重复固定支出记录（同 groupId + name + date） */
-  const seen = new Map();
-  Store.records.forEach(r => {
-    if (!r.isFixed) return;
-    const key = `${r.groupIds.join(',')}_${r.note}_${r.date}`;
-    if (seen.has(key)) {
-      issues.dupFixedRecords++;
-    } else {
-      seen.set(key, r);
-    }
-  });
-  /* 3. 检测非固定消费中异常大额记录（amount > ¥3,000 单笔，超过正常消费范围） */
-  Store.records.forEach(r => {
-    if (r.type !== 'expense' || r.isFixed) return;
-    if (r.amount > 3000) {
-      issues.bigNormalRecords.push({ id: r.id, amount: r.amount, category: r.category, date: r.date, note: r.note });
-    }
-  });
-  return issues;
-}
-
-function openDataHealthDialog() {
-  const issues = scanDataHealth();
-  const total = issues.bigFixedItems.length + issues.bigFixedTotals.length + issues.dupFixedRecords + issues.bigNormalRecords.length;
-  let html = `<div style="line-height:1.8">`;
-  html += `<div style="margin-bottom:10px;font-size:12px;color:var(--muted)">检测到 <b style="color:var(--red)">${total}</b> 项异常数据，按下面提示处理：</div>`;
-  /* 1. 异常固定支出总额 */
-  if (issues.bigFixedTotals.length) {
-    html += `<div style="margin-bottom:10px"><div style="font-weight:700;color:var(--red);margin-bottom:6px">⚠ 固定支出总额异常（${issues.bigFixedTotals.length}个分组）</div>`;
-    issues.bigFixedTotals.forEach(t => {
-      html += `<div style="background:var(--red-bg);border-radius:8px;padding:8px;margin-bottom:4px;font-size:12px">
-        <div><b>${esc(t.groupName)}</b> · 共 ${t.count} 项，配置总额：<b style="color:var(--red)">¥${money(t.total)}/月</b></div>
-        <div style="margin-top:4px"><button class="btn-mini dh-eval-fx" data-gid="${t.groupId}">查看明细并修复</button></div>
-      </div>`;
-    });
-    html += `</div>`;
-  }
-  /* 2. 异常固定支出配置 */
-  if (issues.bigFixedItems.length) {
-    html += `<div style="margin-bottom:10px"><div style="font-weight:700;color:var(--red);margin-bottom:6px">⚠ 固定支出单项金额过大（${issues.bigFixedItems.length}项）</div>`;
-    issues.bigFixedItems.forEach((it, idx) => {
-      html += `<div style="background:var(--red-bg);border-radius:8px;padding:8px;margin-bottom:4px;font-size:12px">
-        <div><b>${esc(it.groupName)}</b> · 第 ${it.itemIdx + 1} 项：${esc(it.itemName)}</div>
-        <div>当前金额：<b style="color:var(--red)">¥${money(it.amount)}</b></div>
-        <div style="margin-top:4px"><button class="btn-mini dh-fix-fx" data-gid="${it.groupId}" data-idx="${it.itemIdx}" data-amt="${it.amount}">重置为 ¥0</button> <button class="btn-mini dh-del-fx" data-gid="${it.groupId}" data-idx="${it.itemIdx}">删除该项</button></div>
-      </div>`;
-    });
-    html += `</div>`;
-  }
-  /* 3. 重复固定支出记录 */
-  if (issues.dupFixedRecords) {
-    html += `<div style="margin-bottom:10px"><div style="font-weight:700;color:var(--orange);margin-bottom:6px">⚠ 重复的固定支出记录：${issues.dupFixedRecords} 条</div>`;
-    html += `<button class="btn-mini" id="dhCleanDup">一键去重（保留最早的）</button></div>`;
-  }
-  /* 4. 异常大额普通记录 */
-  if (issues.bigNormalRecords.length) {
-    html += `<div style="margin-bottom:10px"><div style="font-weight:700;color:var(--red);margin-bottom:6px">⚠ 单笔金额过大的普通消费（${issues.bigNormalRecords.length}条）</div>`;
-    issues.bigNormalRecords.forEach(r => {
-      html += `<div style="background:var(--orange-bg);border-radius:8px;padding:8px;margin-bottom:4px;font-size:12px">
-        <div>${r.date} · ${esc(r.category)} · ${esc(r.note || '')}</div>
-        <div>金额：<b style="color:var(--red)">¥${money(r.amount)}</b>
-        <button class="btn-mini dh-del-rec" data-id="${r.id}" style="float:right">删除</button></div>
-      </div>`;
-    });
-    html += `</div>`;
-  }
-  if (total === 0) {
-    html += `<div style="color:var(--green);text-align:center;padding:20px">✓ 数据健康，未发现异常</div>`;
-  }
-  html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)">判定规则：固定支出单项 > ¥3,000 或总额 > ¥10,000 视为异常；单笔普通消费 > ¥3,000 视为异常；重复记录按（groupId+name+date）去重。</div></div>`;
-  showModalBox('数据健康检查', html);
-  /* 绑定按钮事件 */
-  setTimeout(() => {
-    $$('.dh-fix-fx').forEach(b => b.onclick = () => {
-      const g = Store.groups.find(x => x.id === b.dataset.gid);
-      if (g && g.fixedExpenses[b.dataset.idx]) { g.fixedExpenses[b.dataset.idx].amount = 0; Store.saveGroup(g); toast('已重置为 ¥0'); openDataHealthDialog(); renderAll(); }
-    });
-    $$('.dh-del-fx').forEach(b => b.onclick = () => {
-      const g = Store.groups.find(x => x.id === b.dataset.gid);
-      if (g && g.fixedExpenses[b.dataset.idx]) { g.fixedExpenses.splice(+b.dataset.idx, 1); Store.saveGroup(g); toast('已删除'); openDataHealthDialog(); renderAll(); }
-    });
-    $$('.dh-del-rec').forEach(b => b.onclick = () => {
-      Store.records = Store.records.filter(r => r.id !== b.dataset.id);
-      Store.save('account_records'); toast('已删除'); openDataHealthDialog(); renderAll();
-    });
-    $$('.dh-eval-fx').forEach(b => b.onclick = () => {
-      /* 跳转到该分组的编辑弹窗，让用户自己确认修改 */
-      openGroupModal(b.dataset.gid);
-      $('#modalGeneric').classList.remove('show');
-    });
-    const dupBtn = $('#dhCleanDup');
-    if (dupBtn) dupBtn.onclick = () => {
-      const seen = new Map();
-      const before = Store.records.length;
-      Store.records = Store.records.filter(r => {
-        if (!r.isFixed) return true;
-        const key = `${r.groupIds.join(',')}_${r.note}_${r.date}`;
-        if (seen.has(key)) return false;
-        seen.set(key, r);
-        return true;
-      });
-      Store.save('account_records');
-      toast(`已清理 ${before - Store.records.length} 条重复记录`); openDataHealthDialog(); renderAll();
-    };
-  }, 50);
-}
-/* 通用 modal 弹窗（用于数据健康检查等） */
-function showModalBox(title, html) {
-  let mask = $('#modalGeneric');
-  if (!mask) {
-    mask = document.createElement('div');
-    mask.id = 'modalGeneric';
-    mask.className = 'modal-mask';
-    mask.innerHTML = `<div class="modal" style="max-width:480px"><div class="modal-head"><h3 id="modalGenericTitle"></h3><button class="modal-close" onclick="document.getElementById('modalGeneric').classList.remove('show')">✕</button></div><div id="modalGenericBody" style="max-height:70vh;overflow-y:auto"></div></div>`;
-    document.body.appendChild(mask);
-  }
-  $('#modalGenericTitle').textContent = title;
-  $('#modalGenericBody').innerHTML = html;
-  mask.classList.add('show');
-}
-
-$('#btnDataHealth').onclick = openDataHealthDialog;
 /* 清空所有数据（二次确认；清空后为纯净空白状态，不再重新注入示例数据） */
 $('#btnClearAll').onclick = () => confirmBox('清空所有数据', '⚠ 将删除全部记账、分组、待办、模板与设置（含示例数据），且不可恢复。清空后为空白状态。确定要清空吗？', () => {
   Store.keys.forEach(k => localStorage.removeItem(k));
@@ -2305,6 +2175,9 @@ $('#setTemplates').onclick = openTemplateModal;
 $('#setTags').onclick = openTagModal;
 $('#setDarkMode').onchange = e => { applyTheme(e.target.checked ? 'dark' : 'light'); };
 $('#setDefaultDim').onchange = e => { Store.data.system_settings.defaultDim = e.target.value; Store.save('system_settings'); toast('默认统计维度已设置'); };
+/* 自定义记账本名称：实时写入 system_settings 并同步页头/标题/关于页 */
+$('#setAppName').value = getAppName();
+$('#setAppName').oninput = e => { Store.data.system_settings.appName = e.target.value.trim(); Store.save('system_settings'); applyAppName(); };
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
@@ -2404,6 +2277,8 @@ function init() {
   autoBackup();          /* 每日自动备份快照 */
   applyTheme(Store.data.system_settings.theme || 'light');
   $('#setDefaultDim').value = Store.data.system_settings.defaultDim || 'month';
+  $('#setAppName').value = getAppName();
+  applyAppName();
   statsState.dim = Store.data.system_settings.defaultDim || 'month';
   $('#headerDate').textContent = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
   $('#quickDate').value = todayStr();
