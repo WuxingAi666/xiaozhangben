@@ -1225,7 +1225,9 @@ function renderHome() {
   }
   // 优化-固定支出：首页拆分日常/固定支出展示
   const mStart = today.slice(0, 8) + '01';
-  const mSum = Calc.summarize(Calc.recordsInRange(mStart, today));
+  // 修复：首页读取所有分组的 fixedExpenses 总额，用于覆盖天文数字
+  const mFixedCfg = Store.groups.reduce((a, g) => a + (g.fixedExpenses || []).reduce((x, f) => x + (f.amount || 0), 0), 0);
+  const mSum = Calc.summarize(Calc.recordsInRange(mStart, today), mFixedCfg);
   $('#homeDailySpend').textContent = '¥' + money(mSum.dailyExp);
   $('#homeFixedSpend').textContent = '¥' + money(mSum.fixedExp);
 
@@ -1489,7 +1491,8 @@ function renderGroupDetail() {
     if (gdCatMode === 'daily') return r.mode === 'daily' && !r.isFixed;
     return r.mode === gdCatMode;
   });
-  const catItems = Object.entries(Calc.summarize(modeRecs, gdCatMode === 'fixed' ? realFixedExp : null).byCat).sort((a, b) => b[1] - a[1])
+  // 修复：始终传 realFixedExp（不仅 fixed Tab），避免脏的固定支出记录污染饼图与分类聚合
+  const catItems = Object.entries(Calc.summarize(modeRecs, realFixedExp).byCat).sort((a, b) => b[1] - a[1])
     .map(([label, value]) => ({ label, value, color: catColor(label) }));
   $('#gdPie').innerHTML = svgPie(catItems);
   const t2 = catItems.reduce((a, b) => a + b.value, 0) || 1;
