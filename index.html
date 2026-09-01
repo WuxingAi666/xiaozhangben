@@ -890,9 +890,11 @@ const Calc = {
     });
   },
   /* 汇总：总支出/收入/日常/大额/结余/分类聚合/逐日聚合 */
-  summarize(recs) {
+  summarize(recs, fixedTotalOverride) {
     const s = { expense: 0, income: 0, dailyExp: 0, largeExp: 0, fixedExp: 0, net: 0, byCat: {}, byCatIncome: {}, byDay: {}, count: recs.length };
     for (const r of recs) {
+      // 修复：传入 fixedTotalOverride 时，跳过脏的固定支出记录（避免天文数字）
+      if (r.isFixed && fixedTotalOverride != null) continue;
       if (r.type === 'expense') {
         s.expense += r.amount;
         if (r.isFixed) s.fixedExp += r.amount;
@@ -907,7 +909,15 @@ const Calc = {
       if (r.type === 'expense') day.exp += r.amount; else day.inc += r.amount;
     }
     for (const k of Object.keys(s.byDay)) s.byDay[k].net = s.byDay[k].inc - s.byDay[k].exp;
-    s.net = s.income - s.expense;
+    // 修复：覆盖 fixedExp 与总额计算（用配置的固定支出替代）
+    if (fixedTotalOverride != null) {
+      s.fixedExp = fixedTotalOverride;
+      s.expense = s.dailyExp + s.largeExp + fixedTotalOverride;
+      s.byCat['固定支出'] = fixedTotalOverride;
+      s.net = s.income - s.expense;
+    } else {
+      s.net = s.income - s.expense;
+    }
     return s;
   },
   /* 日均消费·口径A：总消费(日常+大额) ÷ 已过去自然天数（不含固定支出干扰口径，消费=非固定支出） */
@@ -919,9 +929,9 @@ const Calc = {
   /* 分组预算状态：先扣可用预算 → 超出扣储蓄（固定支出前置扣除不参与） */
   budgetState(group) {
     const recs = Store.records.filter(r => r.groupIds.includes(group.id));
-    const sum = this.summarize(recs);
-    // 用配置的固定支出总额，避开历史重复记录造成的污染
+    // 用配置的固定支出总额避开脏数据
     const fixedCfg = (group.fixedExpenses || []).reduce((a, f) => a + f.amount, 0);
+    const sum = this.summarize(recs, fixedCfg);
     const flexible = sum.dailyExp + sum.largeExp;                 // 参与预算扣减的消费（仅非固定支出）
     const pool = group.availableBudget + sum.income;               // 可用预算池 = 配置额度 + 周期内收入记录
     const budgetUsed = Math.min(flexible, pool);
@@ -1334,12 +1344,12 @@ function renderStats() {
   let recs = Calc.recordsInRange(start, end);
   if (st.dim === 'group' && st.groupId) recs = recs.filter(r => r.groupIds.includes(st.groupId));
   if (excludeLarge) recs = recs.filter(r => r.mode !== 'large');
-  const sum = Calc.summarize(recs);
-  const avg = Calc.dailyAvg(sum, start, end);
   // 修正总支出：用配置的固定支出总额替代 sum.fixedExp（避免重复记录造成天文数字）
   const statGroup = (st.dim === 'group' && st.groupId) ? Store.groups.find(x => x.id === st.groupId) : null;
   const statFixedCfg = statGroup ? (statGroup.fixedExpenses || []).reduce((a, f) => a + f.amount, 0) : 0;
-  const cleanExpense = sum.dailyExp + sum.largeExp + statFixedCfg;
+  const sum = Calc.summarize(recs, statFixedCfg);
+  const avg = Calc.dailyAvg(sum, start, end);
+  const cleanExpense = sum.expense;
   const cleanNet = sum.income - cleanExpense;
 
   /* 概览四格 */
@@ -1434,11 +1444,11 @@ function renderGroupDetail() {
   $('#gdName').textContent = g.name;
   $('#gdRange').textContent = `${g.startDate} ~ ${g.endDate} · ${dayDiff(g.startDate, g.endDate) + 1} 天`;
   const recs = Store.records.filter(r => r.groupIds.includes(g.id));
-  const sum = Calc.summarize(recs);
+  const realFixedExp = (g.fixedExpenses || []).reduce((a, f) => a + f.amount, 0);
+  const sum = Calc.summarize(recs, realFixedExp);
   const avg = Calc.dailyAvg(sum, g.startDate, g.endDate);
   const bs = Calc.budgetState(g);
   // 真实总支出：用配置的固定支出总额替代 sum.fixedExp（避免历史重复记录导致天文数字）
-  const realFixedExp = (g.fixedExpenses || []).reduce((a, f) => a + f.amount, 0);
   const realExpense = sum.dailyExp + sum.largeExp + realFixedExp;
   const realNet = sum.income - realExpense;
   $('#gdGrid').innerHTML = `
@@ -1474,7 +1484,7 @@ function renderGroupDetail() {
     if (gdCatMode === 'daily') return r.mode === 'daily' && !r.isFixed;
     return r.mode === gdCatMode;
   });
-  const catItems = Object.entries(Calc.summarize(modeRecs).byCat).sort((a, b) => b[1] - a[1])
+  const catItems = Object.entries(Calc.summarize(modeRecs, gdCatMode === 'fixed' ? realFixedExp : null).byCat).sort((a, b) => b[1] - a[1])
     .map(([label, value]) => ({ label, value, color: catColor(label) }));
   $('#gdPie').innerHTML = svgPie(catItems);
   const t2 = catItems.reduce((a, b) => a + b.value, 0) || 1;
@@ -1483,7 +1493,10 @@ function renderGroupDetail() {
   const days = [];
   let cur = g.startDate;
   while (cur <= g.endDate && days.length < 31) {
-    const d = Calc.summarize(Store.records.filter(r => r.date === cur && r.groupIds.includes(g.id))).byDay[cur] || { exp: 0, inc: 0 };
+    // 计算当天到当前周期截止的固定支出天数（用于等比例分摊）
+    const dayRecs = Store.records.filter(r => r.date === cur && r.groupIds.includes(g.id));
+    const daySum = Calc.summarize(dayRecs, realFixedExp);
+    const d = daySum.byDay[cur] || { exp: 0, inc: 0 };
     days.push({ label: String(Number(cur.slice(8))), exp: d.exp, inc: d.inc });
     cur = addDays(cur, 1);
   }
