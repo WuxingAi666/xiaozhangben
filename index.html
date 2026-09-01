@@ -809,6 +809,10 @@ const dayDiff = (a, b) => Math.round((parseD(b) - parseD(a)) / 86400000);
 const addDays = (s, n) => { const d = parseD(s); d.setDate(d.getDate() + n); return ymd(d); };
 const addMonths = (s, n) => { const d = parseD(s); const day = d.getDate(); d.setDate(1); d.setMonth(d.getMonth() + n); const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); d.setDate(Math.min(day, last)); return ymd(d); };
 const money = n => (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+/* 安全数值转换：非有效数字一律返回 0，彻底杜绝字符串参与运算 */
+const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+/* 安全求和：list 可为 null/undefined；初始值 0；每项强制 Number 转换（防字符串拼接） */
+const sumAmount = list => (list || []).reduce((a, x) => a + (x && x.amount != null ? num(x.amount) : num(x)), 0);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const deep = o => JSON.parse(JSON.stringify(o));
 
@@ -850,6 +854,26 @@ const Store = {
       if (this.data[k] === null || this.data[k] === undefined) { this.data[k] = defs[k]; this.save(k); }
     }
     if (!this.data.category_config.expense || !this.data.category_config.expense.length) this.data.category_config = deep(DEFAULT_CATS);
+    /* 存量数据迁移：将历史字符串类型的固定支出 amount/payDay 批量转为数字，无损兼容旧数据 */
+    this.migrateFixedAmounts();
+  },
+  /* 固定支出金额类型迁移：字符串 → Number（只做类型转换，不改变数据结构与业务含义） */
+  migrateFixedAmounts() {
+    let changed = false;
+    (this.data.period_groups || []).forEach(g => {
+      (g.fixedExpenses || []).forEach(f => {
+        if (typeof f.amount !== 'number' || !Number.isFinite(f.amount)) {
+          f.amount = num(f.amount);
+          changed = true;
+        }
+        if (typeof f.payDay !== 'number' || !Number.isFinite(f.payDay)) {
+          const pd = num(String(f.payDay == null ? 1 : f.payDay).replace(/[^\d]/g, '')) || 1;
+          f.payDay = Math.min(31, Math.max(1, pd));
+          changed = true;
+        }
+      });
+    });
+    if (changed) this.save('period_groups');
   },
   save(key) { try { localStorage.setItem(key, JSON.stringify(this.data[key])); } catch (e) { toast('本地存储写入失败', true); } },
   saveAll() { this.keys.forEach(k => this.save(k)); },
@@ -935,7 +959,7 @@ const Calc = {
   budgetState(group) {
     const recs = Store.records.filter(r => r.groupIds.includes(group.id));
     // 用配置的固定支出总额避开脏数据
-    const fixedCfg = (group.fixedExpenses || []).reduce((a, f) => a + f.amount, 0);
+    const fixedCfg = (group.fixedExpenses || []).reduce((a, f) => a + (Number(f.amount) || 0), 0);
     const sum = this.summarize(recs, fixedCfg);
     const flexible = sum.dailyExp + sum.largeExp;                 // 参与预算扣减的消费（仅非固定支出）
     const pool = group.availableBudget + sum.income;               // 可用预算池 = 配置额度 + 周期内收入记录
@@ -1226,7 +1250,7 @@ function renderHome() {
   // 优化-固定支出：首页拆分日常/固定支出展示
   const mStart = today.slice(0, 8) + '01';
   // 修复：首页读取所有分组的 fixedExpenses 总额，用于覆盖天文数字
-  const mFixedCfg = Store.groups.reduce((a, g) => a + (g.fixedExpenses || []).reduce((x, f) => x + (f.amount || 0), 0), 0);
+  const mFixedCfg = Store.groups.reduce((a, g) => a + (g.fixedExpenses || []).reduce((x, f) => x + (Number(f.amount) || 0), 0), 0);
   const mSum = Calc.summarize(Calc.recordsInRange(mStart, today), mFixedCfg);
   $('#homeDailySpend').textContent = '¥' + money(mSum.dailyExp);
   $('#homeFixedSpend').textContent = '¥' + money(mSum.fixedExp);
@@ -1249,7 +1273,7 @@ function renderHome() {
           <div><div class="pp-name">${esc(g.name)}</div><div class="pp-range">${g.startDate} ~ ${g.endDate} · 点击查看详情 ›</div></div>
         </div>
         <div class="pp-grid">
-          <div class="pp-cell"><div class="k">时段支出</div><div class="v">¥${money(bs.sum.dailyExp + bs.sum.largeExp + ((g.fixedExpenses || []).reduce((a,f)=>a+f.amount,0)))}</div></div>
+          <div class="pp-cell"><div class="k">时段支出</div><div class="v">¥${money(bs.sum.dailyExp + bs.sum.largeExp + ((g.fixedExpenses || []).reduce((a,f)=>a+(Number(f.amount)||0),0)))}</div></div>
           <div class="pp-cell"><div class="k">大额消费</div><div class="v">¥${money(bs.sum.largeExp)}</div></div>
           <div class="pp-cell"><div class="k">日均消费</div><div class="v">¥${money(bs.flexible / avg.elapsed)}</div></div>
           <div class="pp-cell"><div class="k">预算剩余</div><div class="v" style="color:${bs.level === 'danger' ? 'var(--red)' : bs.level === 'warn' ? 'var(--orange)' : 'var(--green)'}">¥${money(bs.budgetLeft)}</div></div>
@@ -1353,7 +1377,7 @@ function renderStats() {
   if (excludeLarge) recs = recs.filter(r => r.mode !== 'large');
   // 修正总支出：用配置的固定支出总额替代 sum.fixedExp（避免重复记录造成天文数字）
   const statGroup = (st.dim === 'group' && st.groupId) ? Store.groups.find(x => x.id === st.groupId) : null;
-  const statFixedCfg = statGroup ? (statGroup.fixedExpenses || []).reduce((a, f) => a + f.amount, 0) : 0;
+  const statFixedCfg = statGroup ? (statGroup.fixedExpenses || []).reduce((a, f) => a + (Number(f.amount) || 0), 0) : 0;
   const sum = Calc.summarize(recs, statFixedCfg);
   const avg = Calc.dailyAvg(sum, start, end);
   const cleanExpense = sum.expense;
@@ -1431,7 +1455,7 @@ function renderGroups() {
           <span class="gc-status ${status[0]}">${status[1]}</span>
         </div>
         <div class="gc-stats">
-          <div class="pp-cell"><div class="k">总支出</div><div class="v">¥${money(bs.sum.dailyExp + bs.sum.largeExp + ((g.fixedExpenses || []).reduce((a,f)=>a+f.amount,0)))}</div></div>
+          <div class="pp-cell"><div class="k">总支出</div><div class="v">¥${money(bs.sum.dailyExp + bs.sum.largeExp + ((g.fixedExpenses || []).reduce((a,f)=>a+(Number(f.amount)||0),0)))}</div></div>
           <div class="pp-cell"><div class="k">日均</div><div class="v">¥${money(bs.flexible / avg.elapsed)}</div></div>
           <div class="pp-cell"><div class="k">预算剩余</div><div class="v" style="color:${bs.level === 'danger' ? 'var(--red)' : bs.level === 'warn' ? 'var(--orange)' : 'var(--green)'}">¥${money(bs.budgetLeft)}</div></div>
         </div>
@@ -1451,7 +1475,7 @@ function renderGroupDetail() {
   $('#gdName').textContent = g.name;
   $('#gdRange').textContent = `${g.startDate} ~ ${g.endDate} · ${dayDiff(g.startDate, g.endDate) + 1} 天`;
   const recs = Store.records.filter(r => r.groupIds.includes(g.id));
-  const realFixedExp = (g.fixedExpenses || []).reduce((a, f) => a + f.amount, 0);
+  const realFixedExp = (g.fixedExpenses || []).reduce((a, f) => a + (Number(f.amount) || 0), 0);
   const sum = Calc.summarize(recs, realFixedExp);
   const avg = Calc.dailyAvg(sum, g.startDate, g.endDate);
   const bs = Calc.budgetState(g);
@@ -1464,7 +1488,7 @@ function renderGroupDetail() {
     <div class="stat-cell"><div class="k">结余</div><div class="v" style="color:${realNet >= 0 ? 'var(--green)' : 'var(--red)'}">¥${money(realNet)}</div></div>
     <div class="stat-cell"><div class="k">日均·口径A</div><div class="v">¥${money(sum.dailyExp / Math.max(1, avg.elapsed))}</div></div>`;
   /* 预算与储蓄 */
-  const fixedTotal = (g.fixedExpenses || []).reduce((a, f) => a + f.amount, 0);
+  const fixedTotal = (g.fixedExpenses || []).reduce((a, f) => a + (Number(f.amount) || 0), 0);
   const barColor = bs.level === 'danger' ? 'var(--red)' : bs.level === 'warn' ? 'var(--orange)' : 'var(--primary)';
   $('#gdBudget').innerHTML = `
     <div class="gc-stats">
@@ -1752,11 +1776,18 @@ function renderMgForm() {
       <button class="fx-del" data-fdel="${i}">✕</button>
     </div>`).join('') : '<div class="empty-tip">暂无固定支出，点击「添加」录入</div>';
   $('#mgFixedList').querySelectorAll('[data-fkf]').forEach(el => {
-    // 修复：金额字段必须转为 Number，否则字符串拼接导致天文数字
+    /* 输入层修复：amount/payDay 强制 Number，空值/非法字符兜底 0；其余字段保持字符串 */
     el.oninput = () => {
       const key = el.dataset.fkf;
-      const val = key === 'amount' || key === 'payDay' ? Number(el.value) || 0 : el.value.trim();
-      mg.fixed[+el.dataset.fx][key] = val;
+      if (key === 'amount') {
+        /* 过滤非法字符后转数值，异常兜底 0 */
+        mg.fixed[+el.dataset.fx].amount = num(el.value.replace(/[^\d.\-]/g, ''));
+      } else if (key === 'payDay') {
+        const pd = Math.min(31, Math.max(1, num(String(el.value).replace(/[^\d]/g, '')) || 1));
+        mg.fixed[+el.dataset.fx].payDay = pd;
+      } else {
+        mg.fixed[+el.dataset.fx][key] = el.value.trim();
+      }
       updateMgFormula();
     };
   });
