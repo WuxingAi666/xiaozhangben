@@ -622,6 +622,7 @@ svg text{font-family:inherit}
     </div>
     <div class="field-col" style="margin-bottom:10px"><label class="field-label">标签</label><div class="chips" id="mrTags"></div></div>
     <div class="field-col" style="margin-bottom:10px"><label class="field-label">所属分组（自动归属，可手动调整）</label><div class="chips" id="mrGroups"></div></div>
+    <div class="mr-fixed-note" id="mrFixedNote" style="display:none;margin:4px 2px 10px;font-size:12px;color:var(--muted);background:var(--card2);border-radius:10px;padding:8px 10px;line-height:1.6">🔒 此为固定支出自动生成记录，无法直接删除。如需移除，请前往对应分组的编辑页，删除对应的固定支出配置项。</div>
     <div class="form-footer">
       <button class="btn-ghost" id="mrCopy">复制</button>
       <button class="btn-ghost" id="mrDelete" style="color:var(--red)">删除</button>
@@ -1006,7 +1007,9 @@ function ensureFixedRecords() {
       while (cursor <= g.endDate) {
         if (cursor <= today) {
           const rid = `fixed_${g.id}_${fx.name}_${cursor}`;
-          if (!Store.records.some(r => r.id === rid)) {
+          /* 加固幂等：同一分组 + 同一名称 + 同一日期，无论 id 格式是否一致都只生成一条（杜绝删后重复生成 / 历史脏数据） */
+          const exists = Store.records.some(r => r.id === rid || (r.isFixed && r.groupIds.includes(g.id) && r.note === fx.name && r.date === cursor));
+          if (!exists) {
             Store.records.push({
               id: rid, type: 'expense', mode: 'daily', amount: fx.amount, category: '固定支出',
               tags: [], date: cursor, note: fx.name, groupIds: [g.id], isFixed: true,
@@ -1527,8 +1530,9 @@ function renderGroupDetail() {
     if (gdCatMode === 'daily') return r.mode === 'daily' && !r.isFixed;
     return r.mode === gdCatMode;
   });
-  // 修复：始终传 realFixedExp（不仅 fixed Tab），避免脏的固定支出记录污染饼图与分类聚合
-  const catItems = Object.entries(Calc.summarize(modeRecs, realFixedExp).byCat).sort((a, b) => b[1] - a[1])
+  // 修复：按 Tab 维度动态传入 fixedTotalOverride——日常/大额不叠加配置固定支出，固定/合计才叠加
+  const gdFixedOverride = (gdCatMode === 'fixed' || gdCatMode === 'all') ? realFixedExp : null;
+  const catItems = Object.entries(Calc.summarize(modeRecs, gdFixedOverride).byCat).sort((a, b) => b[1] - a[1])
     .map(([label, value]) => ({ label, value, color: catColor(label) }));
   $('#gdPie').innerHTML = svgPie(catItems);
   const t2 = catItems.reduce((a, b) => a + b.value, 0) || 1;
@@ -1539,7 +1543,8 @@ function renderGroupDetail() {
   while (cur <= g.endDate && days.length < 31) {
     // 计算当天到当前周期截止的固定支出天数（用于等比例分摊）
     const dayRecs = Store.records.filter(r => r.date === cur && r.groupIds.includes(g.id));
-    const daySum = Calc.summarize(dayRecs, realFixedExp);
+    /* 每日柱状图展示真实逐日消费（含固定支出在其扣款日），不再把整月固定支出摊到每一天 */
+    const daySum = Calc.summarize(dayRecs, null);
     const d = daySum.byDay[cur] || { exp: 0, inc: 0 };
     days.push({ label: String(Number(cur.slice(8))), exp: d.exp, inc: d.inc });
     cur = addDays(cur, 1);
@@ -1554,8 +1559,8 @@ function renderGroupDetail() {
   const span = dayDiff(g.startDate, g.endDate) + 1;
   const pStart = addDays(g.startDate, -span), pEnd = addDays(g.startDate, -1);
   const pSum = Calc.summarize(Calc.recordsInRange(pStart, pEnd));
-  // 同样用「非固定支出」+ 配置固定支出计算，避开重复记录造成的脏数据
-  const pRealExpense = pSum.dailyExp + pSum.largeExp;
+  // 上期同样按「非固定支出 + 配置固定支出」口径，与本期 realExpense 对齐，避免跨周期对比口径不对等
+  const pRealExpense = pSum.dailyExp + pSum.largeExp + realFixedExp;
   const diff = realExpense - pRealExpense;
   const topCats = Object.entries(sum.byCat).sort((a, b) => b[1] - a[1]).slice(0, 3);
   $('#gdCompare').innerHTML = `
@@ -1693,6 +1698,10 @@ const mr = { id: null, mode: 'daily', type: 'expense', category: '饮食', tags:
 function openRecordModal(id) {
   const r = Store.records.find(x => x.id === id); if (!r) return;
   mr.id = r.id; mr.mode = r.mode; mr.type = r.type; mr.category = r.category; mr.tags = [...(r.tags || [])]; mr.groupIds = [...(r.groupIds || [])];
+  mr.isFixed = !!r.isFixed;
+  /* 固定支出自动生成记录：隐藏删除按钮并展示引导提示，避免用户误删后再次被自动生成（表现"删不掉"） */
+  $('#mrDelete').style.display = mr.isFixed ? 'none' : '';
+  $('#mrFixedNote').style.display = mr.isFixed ? 'block' : 'none';
   $('#mrTitle').textContent = '编辑记录';
   $('#mrAmount').value = r.amount; $('#mrDate').value = r.date; $('#mrNote').value = r.note || '';
   $$('#mrSegMode button').forEach(b => b.classList.toggle('on', b.dataset.v === mr.mode));
@@ -1751,6 +1760,8 @@ $('#mrSave').onclick = () => {
   toast('已保存'); renderAll();
 };
 $('#mrDelete').onclick = () => {
+  /* 防护：固定支出自动生成记录不可删（兜底，正常已隐藏按钮） */
+  if (mr.isFixed) { toast('固定支出自动生成记录无法直接删除，请前往分组编辑页删除对应配置', true); return; }
   confirmBox('删除记录', '确定删除这条记录吗？删除后不可恢复。', () => {
     Store.removeRecord(mr.id);
     $('#modalRecord').classList.remove('show');
