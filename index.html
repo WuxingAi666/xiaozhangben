@@ -1045,6 +1045,19 @@ function ensureFixedRecords() {
       }
     }
   }
+  /* 4) 孤儿清理：清除所属分组已被删除、但仍残留的自动固定支出记录
+        （分组删除后这些记录失去管理入口，会永久虚增总支出）
+        安全边界：仅清 isFixed 记录；普通手动记账记录一律不删
+        多归属记录只要还有一个 id 属于现存分组就保留 */
+  const liveGids = new Set(Store.groups.map(g => g.id));
+  for (let i = Store.records.length - 1; i >= 0; i--) {
+    const r = Store.records[i];
+    if (!r.isFixed) continue;
+    if (!(r.groupIds || []).some(id => liveGids.has(id))) {
+      Store.records.splice(i, 1);                                   /* 倒序 splice：Store.records 是 getter 无 setter */
+      changed = true;
+    }
+  }
   if (changed) { Store.records.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt); Store.save('account_records'); }
 }
 
@@ -1527,7 +1540,7 @@ function renderGroupDetail() {
     <div class="stat-cell"><div class="k">总支出</div><div class="v exp">¥${money(realExpense)}</div></div>
     <div class="stat-cell"><div class="k">总收入</div><div class="v inc">¥${money(sum.income)}</div></div>
     <div class="stat-cell"><div class="k">结余</div><div class="v" style="color:${realNet >= 0 ? 'var(--green)' : 'var(--red)'}">¥${money(realNet)}</div></div>
-    <div class="stat-cell"><div class="k">日均·口径A</div><div class="v">¥${money(sum.dailyExp / Math.max(1, avg.elapsed))}</div></div>`;
+    <div class="stat-cell"><div class="k">日均·口径A</div><div class="v">¥${money(avg.avg)}</div></div>`;
   /* 预算与储蓄 */
   const fixedTotal = (g.fixedExpenses || []).reduce((a, f) => a + (Number(f.amount) || 0), 0);
   const barColor = bs.level === 'danger' ? 'var(--red)' : bs.level === 'warn' ? 'var(--orange)' : 'var(--primary)';
@@ -1940,7 +1953,7 @@ $('#mgSave').onclick = () => {
   toast('分组已保存'); renderAll();
 };
 $('#mgDelete').onclick = () => {
-  confirmBox('删除分组', '仅删除分组本身，组内所有记账记录会保留，并继续纳入自然月统计。确认删除？', () => {
+  confirmBox('删除分组', '仅删除分组本身；组内手动记账记录会保留并继续纳入自然月统计，该分组自动生成的固定支出记录将同步删除。确认删除？', () => {
     Store.removeGroup(mg.id);
     /* 固定支出记录依附分组配置存在：分组删除后失去管理入口且无法清理，必须同步删除，避免僵尸数据永久虚增总支出
        普通手动记账记录：沿用原有设计，仅移除分组归属，记录本身保留
