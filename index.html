@@ -994,31 +994,54 @@ const Calc = {
 };
 
 /* ============================================================
- * 固定支出：到达扣款日自动生成记录（幂等，按 id 去重）
+ * 固定支出：按配置生成记录（仅生成扣款日 >= 今天的记录，不回溯补生成历史账单）
+ *           配置变更强同步：改金额→同步更新；改名/扣款日→清旧建新；删配置→清除对应记录
  * ============================================================ */
 function ensureFixedRecords() {
   const today = todayStr();
   let changed = false;
   for (const g of Store.groups) {
-    for (const fx of (g.fixedExpenses || [])) {
-      /* 从分组开始日期起，逐月定位扣款日（payDay 为几号，超月底取当月最后一天） */
+    const fxList = g.fixedExpenses || [];
+    /* 1) 重建当前各项配置的全周期扣款日序列：name -> { fx, seq }
+          含历史日期（用于对账、保留老记录），但新增时只取 >= 今天 */
+    const cfgMap = {};
+    for (const fx of fxList) {
+      const seq = new Set();
       let cursor = g.startDate.slice(0, 8) + pad2(Math.min(fx.payDay, 28));
       if (cursor < g.startDate) cursor = addMonths(cursor, 1);
-      while (cursor <= g.endDate) {
-        if (cursor <= today) {
-          const rid = `fixed_${g.id}_${fx.name}_${cursor}`;
-          /* 加固幂等：同一分组 + 同一名称 + 同一日期，无论 id 格式是否一致都只生成一条（杜绝删后重复生成 / 历史脏数据） */
-          const exists = Store.records.some(r => r.id === rid || (r.isFixed && r.groupIds.includes(g.id) && r.note === fx.name && r.date === cursor));
-          if (!exists) {
-            Store.records.push({
-              id: rid, type: 'expense', mode: 'daily', amount: fx.amount, category: '固定支出',
-              tags: [], date: cursor, note: fx.name, groupIds: [g.id], isFixed: true,
-              createdAt: Date.now(), updatedAt: Date.now()
-            });
-            changed = true;
-          }
+      while (cursor <= g.endDate) { seq.add(cursor); cursor = addMonths(cursor, 1); }
+      cfgMap[fx.name] = { fx, seq };
+    }
+    /* 2) 对账：金额同步 + 清除废弃记录（匹配规则不变：分组ID + 名称 + 日期） */
+    for (let i = Store.records.length - 1; i >= 0; i--) {
+      const r = Store.records[i];
+      if (!r.isFixed || !r.groupIds || !r.groupIds.includes(g.id)) continue;
+      const cfg = cfgMap[r.note];
+      if (cfg && cfg.seq.has(r.date)) {
+        /* 配置仍在且日期合法 → 同步金额，保证明细金额与配置一致 */
+        const amt = Number(cfg.fx.amount) || 0;
+        if (Number(r.amount) !== amt) { r.amount = amt; r.updatedAt = Date.now(); changed = true; }
+      } else {
+        /* 配置已删除 / 改名 / 改扣款日 / 日期超出周期 → 清除该条废弃记录，不留冗余 */
+        Store.records.splice(i, 1);
+        changed = true;
+      }
+    }
+    /* 3) 新增：仅生成扣款日 >= 今天的记录，不回溯补生成历史账单 */
+    for (const fx of fxList) {
+      for (const d of cfgMap[fx.name].seq) {
+        if (d < today) continue;
+        const rid = `fixed_${g.id}_${fx.name}_${d}`;
+        /* 幂等：同一分组 + 同一名称 + 同一日期，无论 id 格式是否一致都只生成一条 */
+        const exists = Store.records.some(r => r.id === rid || (r.isFixed && r.groupIds && r.groupIds.includes(g.id) && r.note === fx.name && r.date === d));
+        if (!exists) {
+          Store.records.push({
+            id: rid, type: 'expense', mode: 'daily', amount: Number(fx.amount) || 0, category: '固定支出',
+            tags: [], date: d, note: fx.name, groupIds: [g.id], isFixed: true,
+            createdAt: Date.now(), updatedAt: Date.now()
+          });
+          changed = true;
         }
-        cursor = addMonths(cursor, 1);
       }
     }
   }
