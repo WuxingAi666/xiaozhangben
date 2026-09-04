@@ -1420,13 +1420,16 @@ function renderStats() {
   const avg = Calc.dailyAvg(sum, start, end);
   const cleanExpense = sum.expense;
   const cleanNet = sum.income - cleanExpense;
+  /* 日均消费·口径A：全维度统一 (日常 + 大额) ÷ 已过去天数（不含固定支出）
+     联动「排除大额」开关：开启时仅计日常，关闭时日常 + 大额 */
+  const avgExpense = excludeLarge ? sum.dailyExp : (sum.dailyExp + sum.largeExp);
 
   /* 概览四格 */
   $('#statGrid').innerHTML = `
     <div class="stat-cell"><div class="k">总支出</div><div class="v exp">¥${money(cleanExpense)}</div></div>
     <div class="stat-cell"><div class="k">总收入</div><div class="v inc">¥${money(sum.income)}</div></div>
     <div class="stat-cell"><div class="k">结余</div><div class="v" style="color:${cleanNet >= 0 ? 'var(--green)' : 'var(--red)'}">¥${money(cleanNet)}</div></div>
-    <div class="stat-cell"><div class="k">日均消费</div><div class="v">¥${money(st.dim === 'day' ? cleanExpense : (sum.dailyExp / Math.max(1, avg.elapsed)))}</div></div>`;
+    <div class="stat-cell"><div class="k">日均消费</div><div class="v">¥${money(avgExpense / Math.max(1, avg.elapsed))}</div></div>`;
 
   /* 饼图（分类支出占比）+ 图例（点击展开分类明细） */
   const catItems = Object.entries(sum.byCat).sort((a, b) => b[1] - a[1])
@@ -1939,8 +1942,20 @@ $('#mgSave').onclick = () => {
 $('#mgDelete').onclick = () => {
   confirmBox('删除分组', '仅删除分组本身，组内所有记账记录会保留，并继续纳入自然月统计。确认删除？', () => {
     Store.removeGroup(mg.id);
-    /* 记录保留：从记录中移除该分组归属即可 */
-    Store.records.forEach(r => { if (r.groupIds.includes(mg.id)) { r.groupIds = r.groupIds.filter(x => x !== mg.id); Store.updateRecord(r); } });
+    /* 固定支出记录依附分组配置存在：分组删除后失去管理入口且无法清理，必须同步删除，避免僵尸数据永久虚增总支出
+       普通手动记账记录：沿用原有设计，仅移除分组归属，记录本身保留
+       注：Store.records 为 getter（无 setter），删除须倒序 splice 原地操作 */
+    for (let i = Store.records.length - 1; i >= 0; i--) {
+      const r = Store.records[i];
+      if (!r.groupIds || !r.groupIds.includes(mg.id)) continue;
+      if (r.isFixed) {
+        Store.records.splice(i, 1);                                  /* 清除该分组自动生成的固定支出记录 */
+      } else {
+        r.groupIds = r.groupIds.filter(x => x !== mg.id);            /* 普通记录仅摘归属，保留记录本身 */
+        Store.updateRecord(r);
+      }
+    }
+    Store.save('account_records');                                    /* splice 不触发保存，显式落盘 */
     $('#modalGroup').classList.remove('show');
     toast('分组已删除，记录已保留'); switchPage('groups'); renderAll();
   });
